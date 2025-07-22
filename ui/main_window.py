@@ -23,7 +23,7 @@ class MainWindow(QWidget):
 
     def init_ui(self):
         self.setWindowTitle(f'PDF转长图工具 {self.VERSION} (By Hellohistory)')
-        self.setWindowIcon(QIcon('assets/logo_6.ico'))
+        self.setWindowIcon(QIcon('assets/logo.ico'))
         self.setGeometry(200, 200, 600, 580)  # 稍微增加高度以容纳新控件
         self.setAcceptDrops(True)
 
