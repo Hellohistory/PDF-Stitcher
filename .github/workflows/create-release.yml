@@ -2,51 +2,58 @@
 
 name: Create Release and Upload Binaries
 
-# 工作流触发条件：当一个格式为 v*.*.* 的新标签被推送到仓库时
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  release:
+    types: [published]
 
 jobs:
   build-and-upload:
-    name: Build for ${{ matrix.os }}
-    # 使用矩阵策略，为三个主流操作系统并行构建
+    name: Build for ${{ matrix.friendly_name }}
+
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
-          - os: ubuntu-latest
-            asset_name: PDF Stitcher-linux
-            asset_content_type: application/octet-stream
-          - os: macos-latest
-            asset_name: PDF Stitcher-macos
-            asset_content_type: application/octet-stream
+          # --- Windows 10/11 ---
           - os: windows-latest
-            asset_name: PDF Stitcher-windows.exe
-            asset_content_type: application/vnd.microsoft.portable-executable
+            python-version: '3.9'
+            friendly_name: Windows 10/11
+            asset_name: PDF Stitcher-windows-x64.exe
+
+          # --- Windows 7 兼容版 ---
+          - os: windows-2022
+            python-version: '3.8' # Python 3.8 是最后一个支持 Win7 的版本
+            friendly_name: Windows 7 Compatible
+            asset_name: PDF Stitcher-windows-x86_64-win7-compatible.exe
+
+          # --- macOS ---
+          - os: macos-latest
+            python-version: '3.9'
+            friendly_name: macOS
+            asset_name: PDF Stitcher-macos
+
+          # --- Linux ---
+          - os: ubuntu-latest
+            python-version: '3.9'
+            friendly_name: Linux
+            asset_name: PDF Stitcher-linux
 
     steps:
-      # 1. 检出代码
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. 设置 Python 环境
-      - name: Set up Python
+      - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.8.1'
+          python-version: ${{ matrix.python-version }}
 
-      # 3. 安装项目依赖
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 4. 使用 PyInstaller 打包
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller on ${{ matrix.os }}
         run: |
           if [ "$RUNNER_OS" == "Windows" ]; then
             SEPARATOR=";"
@@ -54,21 +61,19 @@ jobs:
             SEPARATOR=":"
           fi
           
-          pyinstaller --name ${{ matrix.asset_name }} \
+          pyinstaller --name "${{ matrix.asset_name }}" \
                       --onefile \
                       --windowed \
                       --icon=assets/logo_6.ico \
                       --add-data "assets${SEPARATOR}assets" \
                       main.py
-      
-      # 5. 上传构建好的可执行文件到 Release
+
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # 从触发工作流的标签事件中获取上传URL
           upload_url: ${{ github.event.release.upload_url }}
           asset_path: ./dist/${{ matrix.asset_name }}
           asset_name: ${{ matrix.asset_name }}
-          asset_content_type: ${{ matrix.asset_content_type }}
+          asset_content_type: application/octet-stream
