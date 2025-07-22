@@ -14,7 +14,6 @@ def process_page(pdf_doc, page_num, zoom_matrix, temp_dir):
         pix = page.get_pixmap(matrix=zoom_matrix)
         img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
-        # 使用页码作为文件名，确保顺序
         image_path = os.path.join(temp_dir, f"page_{page_num:05d}.png")
         img.save(image_path, format='PNG')
         return image_path
@@ -28,11 +27,10 @@ def extract_images_from_pdf(pdf_path, zoom_factor, temp_dir, log_callback, progr
     try:
         log_callback(f"🚀 开始处理文件: {os.path.basename(pdf_path)}")
         pdf_doc = fitz.open(pdf_path)
-        total_pages = len(pdf_doc)  # 获取总页数
+        total_pages = len(pdf_doc)
         zoom_matrix = fitz.Matrix(zoom_factor, zoom_factor)
         image_paths = []
 
-        # 如果没有页面，直接返回
         if total_pages == 0:
             log_callback(f"⚠️ 文件为空，无页面可处理: {os.path.basename(pdf_path)}")
             if progress_callback:
@@ -56,10 +54,8 @@ def extract_images_from_pdf(pdf_path, zoom_factor, temp_dir, log_callback, progr
                     progress_callback(completed_pages, total_pages)
 
                 if result_path:
-                    # 存储页码和路径，以便稍后排序
                     results.append((page_num, result_path))
 
-        # 确保图像按正确的页面顺序排列
         results.sort(key=lambda x: x[0])
         image_paths = [path for _, path in results]
 
@@ -74,45 +70,58 @@ def extract_images_from_pdf(pdf_path, zoom_factor, temp_dir, log_callback, progr
         return []
 
 
-def concatenate_images_vertically(image_paths, output_image_base_path, images_per_long, log_callback):
-    """将一组图像垂直拼接成一张或多张长图。"""
+# --- 函数已重构以优化内存并支持格式控制 ---
+def concatenate_images_vertically(image_paths, output_image_base_path, images_per_long, log_callback, output_format,
+                                  quality):
+    """将一组图像垂直拼接成一张或多张长图（内存优化版）。"""
     if not image_paths:
         return
 
     total_images = len(image_paths)
-    num_long_images = (total_images + images_per_long - 1) // images_per_long
+    file_extension = output_format.lower()
 
     for i in range(0, total_images, images_per_long):
         chunk_paths = image_paths[i:i + images_per_long]
         part_num = (i // images_per_long) + 1
 
         try:
-            images_to_stitch = [Image.open(p) for p in chunk_paths]
-
-            # 检查尺寸，Pillow有65535像素的限制
-            total_height = sum(img.height for img in images_to_stitch)
-            max_width = max(img.width for img in images_to_stitch)
+            # --- 步骤1: 预扫描以获取尺寸 ---
+            log_callback(f"  - 正在分析第 {part_num} 部分的尺寸...")
+            total_height = 0
+            max_width = 0
+            for p in chunk_paths:
+                with Image.open(p) as img:
+                    total_height += img.height
+                    if img.width > max_width:
+                        max_width = img.width
 
             if total_height > MAX_IMAGE_DIMENSION:
                 log_callback(
-                    f"警告: 第 {part_num} 部分高度过高 ({total_height}px)，将跳过拼接。请尝试减少'每张长图的图片数量'。")
+                    f"⚠️ 警告: 第 {part_num} 部分高度过高 ({total_height}px)，将跳过拼接。请尝试减少'每张长图的图片数量'。")
                 continue
 
-            # 创建新的空白长图
+            # --- 步骤2: 创建画布并逐个粘贴 ---
+            log_callback(f"  - 正在创建第 {part_num} 部分的画布 (尺寸: {max_width}x{total_height})...")
             long_image = Image.new("RGB", (max_width, total_height))
             y_offset = 0
-            for img in images_to_stitch:
-                long_image.paste(img, (0, y_offset))
-                y_offset += img.height
-                img.close()
+            for p in chunk_paths:
+                with Image.open(p) as img:
+                    long_image.paste(img, (0, y_offset))
+                    y_offset += img.height
 
             # 根据是否有多张长图决定文件名
+            num_long_images = (total_images + images_per_long - 1) // images_per_long
             if num_long_images > 1:
-                output_path = f"{output_image_base_path}_part{part_num}.jpg"
+                output_path = f"{output_image_base_path}_part{part_num}.{file_extension}"
             else:
-                output_path = f"{output_image_base_path}.jpg"
+                output_path = f"{output_image_base_path}.{file_extension}"
 
-            long_image.save(output_path, "JPEG", quality=95)
+            # --- 根据格式进行保存 ---
+            if output_format == 'JPEG':
+                long_image.save(output_path, "JPEG", quality=quality)
+            elif output_format == 'PNG':
+                long_image.save(output_path, "PNG")
+
             log_callback(f"🎉 已生成长图: {os.path.basename(output_path)}")
 
         except Exception as e:
