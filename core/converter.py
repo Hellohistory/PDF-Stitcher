@@ -23,23 +23,38 @@ def process_page(pdf_doc, page_num, zoom_matrix, temp_dir):
         return None
 
 
-def extract_images_from_pdf(pdf_path, zoom_factor, temp_dir, log_callback):
+def extract_images_from_pdf(pdf_path, zoom_factor, temp_dir, log_callback, progress_callback=None):
     """从PDF文件中提取所有页面为图像。"""
     try:
         log_callback(f"🚀 开始处理文件: {os.path.basename(pdf_path)}")
         pdf_doc = fitz.open(pdf_path)
+        total_pages = len(pdf_doc)  # 获取总页数
         zoom_matrix = fitz.Matrix(zoom_factor, zoom_factor)
         image_paths = []
+
+        # 如果没有页面，直接返回
+        if total_pages == 0:
+            log_callback(f"⚠️ 文件为空，无页面可处理: {os.path.basename(pdf_path)}")
+            if progress_callback:
+                progress_callback(0, 0)
+            return []
 
         with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             future_to_page = {
                 executor.submit(process_page, pdf_doc, page_num, zoom_matrix, temp_dir): page_num
-                for page_num in range(len(pdf_doc))
+                for page_num in range(total_pages)
             }
             results = []
+
+            completed_pages = 0
             for future in as_completed(future_to_page):
                 page_num = future_to_page[future]
                 result_path = future.result()
+
+                completed_pages += 1
+                if progress_callback:
+                    progress_callback(completed_pages, total_pages)
+
                 if result_path:
                     # 存储页码和路径，以便稍后排序
                     results.append((page_num, result_path))
@@ -89,7 +104,7 @@ def concatenate_images_vertically(image_paths, output_image_base_path, images_pe
             for img in images_to_stitch:
                 long_image.paste(img, (0, y_offset))
                 y_offset += img.height
-                img.close()  # 及时关闭图片文件句柄
+                img.close()
 
             # 根据是否有多张长图决定文件名
             if num_long_images > 1:
@@ -97,7 +112,7 @@ def concatenate_images_vertically(image_paths, output_image_base_path, images_pe
             else:
                 output_path = f"{output_image_base_path}.jpg"
 
-            long_image.save(output_path, "JPEG", quality=95)  # 使用JPEG并指定质量
+            long_image.save(output_path, "JPEG", quality=95)
             log_callback(f"🎉 已生成长图: {os.path.basename(output_path)}")
 
         except Exception as e:

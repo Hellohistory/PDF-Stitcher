@@ -12,20 +12,20 @@ from core.worker import BatchConvertWorker
 
 
 class MainWindow(QWidget):
-    VERSION = "v1.0.1"
+    VERSION = "v2.1.0"  # 版本号更新
 
     def __init__(self):
         super().__init__()
         self.pdf_files = []
-        self.worker = None  # 初始化worker为空
+        self.worker = None
         self.init_ui()
         self.load_settings()
 
     def init_ui(self):
         self.setWindowTitle(f'PDF转长图工具 {self.VERSION} (By Hellohistory)')
-        self.setWindowIcon(QIcon('assets/logo.ico'))
+        self.setWindowIcon(QIcon('assets/logo_6.ico'))
         self.setGeometry(200, 200, 600, 550)
-        self.setAcceptDrops(True)  # 启用拖放
+        self.setAcceptDrops(True)
 
         layout = QVBoxLayout()
 
@@ -67,6 +67,9 @@ class MainWindow(QWidget):
 
         # 进度条和开始按钮
         self.progress_bar = QProgressBar(textVisible=True, alignment=Qt.AlignCenter)
+        self.status_label = QLabel("一切就绪，请选择文件开始转换。")
+        self.status_label.setAlignment(Qt.AlignCenter)
+
         self.btn_start = QPushButton('开始转换')
         self.btn_start.setEnabled(False)
         self.btn_start.clicked.connect(self.start_conversion)
@@ -74,7 +77,9 @@ class MainWindow(QWidget):
         bottom_layout = QHBoxLayout()
         bottom_layout.addWidget(self.progress_bar)
         bottom_layout.addWidget(self.btn_start)
+
         layout.addLayout(bottom_layout)
+        layout.addWidget(self.status_label)
 
         self.setLayout(layout)
         self.apply_stylesheet()
@@ -93,9 +98,11 @@ class MainWindow(QWidget):
             }
             QPushButton:hover { background-color: #005a9e; }
             QPushButton:disabled { background-color: #a0a0a0; }
-            QProgressBar { text-align: center; border-radius: 5px; }
+            QProgressBar { text-align: center; border-radius: 5px; height: 24px; }
             QProgressBar::chunk { background-color: #0078d7; border-radius: 5px; }
+            #status_label { color: #555; font-size: 12px; }
         """)
+        self.status_label.setObjectName("status_label")
 
     def select_pdf_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, "选择一个或多个PDF文件", "", "PDF Files (*.pdf)")
@@ -118,6 +125,7 @@ class MainWindow(QWidget):
         self.btn_start.setEnabled(False)
         self.log_box.clear()
         self.progress_bar.setValue(0)
+        self.status_label.setText("任务准备中...")
 
         # 创建并启动Worker线程
         self.worker = BatchConvertWorker(
@@ -126,20 +134,28 @@ class MainWindow(QWidget):
             zoom=self.zoom_spinbox.value(),
             images_per_long=self.pages_per_image_spinbox.value()
         )
-        # 连接信号到槽函数
+
         self.worker.log_message.connect(self.log_box.append)
-        self.worker.update_progress.connect(self.progress_bar.setValue)
+        self.worker.update_detailed_progress.connect(self.on_detailed_progress_update)
         self.worker.finished.connect(self.on_conversion_finished)
         self.worker.start()
 
+    def on_detailed_progress_update(self, percent, text):
+        self.progress_bar.setValue(percent)
+        self.status_label.setText(text)
+
     def on_conversion_finished(self, summary):
         failed_count = len(summary['failed'])
+        success_count = len(self.pdf_files) - failed_count
+
         if failed_count > 0:
             QMessageBox.warning(self, "转换有失败", f"{failed_count} 个文件转换失败:\n" + "\n".join(summary['failed']))
         else:
             QMessageBox.information(self, "转换完成", "所有PDF文件已成功转换为长图！")
 
-        # 清空选择，方便下次操作
+        self.status_label.setText(f"任务完成！成功 {success_count} 个, 失败 {failed_count} 个。")
+        self.progress_bar.setValue(100)
+
         self.pdf_files = []
         self.pdf_path_line_edit.clear()
         self.btn_start.setEnabled(False)
@@ -180,7 +196,7 @@ class MainWindow(QWidget):
                     self.zoom_spinbox.setValue(settings.get("zoom_factor", 2))
                     self.pages_per_image_spinbox.setValue(settings.get("pages_per_image", 10))
         except (IOError, json.JSONDecodeError):
-            pass  # 加载失败则忽略
+            pass
 
     def save_settings(self):
         settings = {
