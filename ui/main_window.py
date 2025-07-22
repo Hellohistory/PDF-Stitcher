@@ -1,0 +1,196 @@
+# ui/main_window.py
+import json
+import os
+
+from PySide2.QtCore import Qt
+from PySide2.QtGui import QIcon, QDragEnterEvent, QDropEvent
+from PySide2.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton,
+                               QFileDialog, QProgressBar, QSpinBox, QHBoxLayout, QLineEdit,
+                               QMessageBox, QTextEdit)
+
+from core.worker import BatchConvertWorker
+
+
+class MainWindow(QWidget):
+    VERSION = "v1.0.1"
+
+    def __init__(self):
+        super().__init__()
+        self.pdf_files = []
+        self.worker = None  # 初始化worker为空
+        self.init_ui()
+        self.load_settings()
+
+    def init_ui(self):
+        self.setWindowTitle(f'PDF转长图工具 {self.VERSION} (By Hellohistory)')
+        self.setWindowIcon(QIcon('assets/logo.ico'))
+        self.setGeometry(200, 200, 600, 550)
+        self.setAcceptDrops(True)  # 启用拖放
+
+        layout = QVBoxLayout()
+
+        # PDF选择
+        self.pdf_path_line_edit = QLineEdit(placeholderText="请点击按钮选择PDF文件，或将文件/文件夹拖拽至此")
+        self.pdf_path_line_edit.setReadOnly(True)
+        self.btn_select_pdf = QPushButton('选择PDF文件')
+        self.btn_select_pdf.clicked.connect(self.select_pdf_files)
+
+        pdf_layout = QHBoxLayout()
+        pdf_layout.addWidget(self.pdf_path_line_edit)
+        pdf_layout.addWidget(self.btn_select_pdf)
+        layout.addLayout(pdf_layout)
+
+        # 参数设置
+        params_layout = QHBoxLayout()
+        params_layout.addWidget(QLabel("图像清晰度 (1-5):"))
+        self.zoom_spinbox = QSpinBox(minimum=1, maximum=5, value=2)
+        params_layout.addWidget(self.zoom_spinbox)
+        params_layout.addStretch()
+        params_layout.addWidget(QLabel("每张长图页数:"))
+        self.pages_per_image_spinbox = QSpinBox(minimum=1, maximum=200, value=10)
+        params_layout.addWidget(self.pages_per_image_spinbox)
+        layout.addLayout(params_layout)
+
+        # 保存路径
+        self.save_path_line_edit = QLineEdit(placeholderText="请选择转换后图片的保存文件夹")
+        self.btn_select_save = QPushButton('选择保存位置')
+        self.btn_select_save.clicked.connect(self.select_save_folder)
+
+        save_layout = QHBoxLayout()
+        save_layout.addWidget(self.save_path_line_edit)
+        save_layout.addWidget(self.btn_select_save)
+        layout.addLayout(save_layout)
+
+        # 日志输出
+        self.log_box = QTextEdit(readOnly=True)
+        layout.addWidget(self.log_box)
+
+        # 进度条和开始按钮
+        self.progress_bar = QProgressBar(textVisible=True, alignment=Qt.AlignCenter)
+        self.btn_start = QPushButton('开始转换')
+        self.btn_start.setEnabled(False)
+        self.btn_start.clicked.connect(self.start_conversion)
+
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addWidget(self.progress_bar)
+        bottom_layout.addWidget(self.btn_start)
+        layout.addLayout(bottom_layout)
+
+        self.setLayout(layout)
+        self.apply_stylesheet()
+
+    def apply_stylesheet(self):
+        self.setStyleSheet("""
+            QWidget { font-family: 'Microsoft YaHei'; background-color: #f0f0f0; }
+            QLabel { font-size: 14px; color: #333; }
+            QLineEdit, QSpinBox, QTextEdit { 
+                border: 1px solid #ccc; border-radius: 4px; padding: 5px; 
+                background-color: #fff; color: #333;
+            }
+            QPushButton { 
+                background-color: #0078d7; color: white; border: none;
+                border-radius: 4px; padding: 8px 12px; font-size: 14px;
+            }
+            QPushButton:hover { background-color: #005a9e; }
+            QPushButton:disabled { background-color: #a0a0a0; }
+            QProgressBar { text-align: center; border-radius: 5px; }
+            QProgressBar::chunk { background-color: #0078d7; border-radius: 5px; }
+        """)
+
+    def select_pdf_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "选择一个或多个PDF文件", "", "PDF Files (*.pdf)")
+        if files:
+            self.pdf_files = files
+            self.pdf_path_line_edit.setText(f"已选择 {len(files)} 个文件")
+            self.check_readiness()
+
+    def select_save_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "选择保存文件夹")
+        if folder:
+            self.save_path_line_edit.setText(folder)
+            self.check_readiness()
+
+    def check_readiness(self):
+        ready = bool(self.pdf_files and self.save_path_line_edit.text())
+        self.btn_start.setEnabled(ready)
+
+    def start_conversion(self):
+        self.btn_start.setEnabled(False)
+        self.log_box.clear()
+        self.progress_bar.setValue(0)
+
+        # 创建并启动Worker线程
+        self.worker = BatchConvertWorker(
+            pdf_files=self.pdf_files,
+            output_folder=self.save_path_line_edit.text(),
+            zoom=self.zoom_spinbox.value(),
+            images_per_long=self.pages_per_image_spinbox.value()
+        )
+        # 连接信号到槽函数
+        self.worker.log_message.connect(self.log_box.append)
+        self.worker.update_progress.connect(self.progress_bar.setValue)
+        self.worker.finished.connect(self.on_conversion_finished)
+        self.worker.start()
+
+    def on_conversion_finished(self, summary):
+        failed_count = len(summary['failed'])
+        if failed_count > 0:
+            QMessageBox.warning(self, "转换有失败", f"{failed_count} 个文件转换失败:\n" + "\n".join(summary['failed']))
+        else:
+            QMessageBox.information(self, "转换完成", "所有PDF文件已成功转换为长图！")
+
+        # 清空选择，方便下次操作
+        self.pdf_files = []
+        self.pdf_path_line_edit.clear()
+        self.btn_start.setEnabled(False)
+
+    # --- 拖放事件处理 ---
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        urls = event.mimeData().urls()
+        dropped_files = []
+        for url in urls:
+            path = url.toLocalFile()
+            if os.path.isdir(path):
+                # 如果是文件夹，遍历其中的PDF
+                for root, _, files in os.walk(path):
+                    for name in files:
+                        if name.lower().endswith('.pdf'):
+                            dropped_files.append(os.path.join(root, name))
+            elif path.lower().endswith('.pdf'):
+                # 如果是文件，直接添加
+                dropped_files.append(path)
+
+        if dropped_files:
+            self.pdf_files = list(set(dropped_files))  # 去重
+            self.pdf_path_line_edit.setText(f"已拖拽并选择 {len(self.pdf_files)} 个文件")
+            self.log_box.append(f"已添加 {len(self.pdf_files)} 个PDF文件。")
+            self.check_readiness()
+
+    # --- 设置保存与加载 ---
+    def load_settings(self):
+        try:
+            if os.path.exists("settings.json"):
+                with open("settings.json", "r") as f:
+                    settings = json.load(f)
+                    self.save_path_line_edit.setText(settings.get("save_path", ""))
+                    self.zoom_spinbox.setValue(settings.get("zoom_factor", 2))
+                    self.pages_per_image_spinbox.setValue(settings.get("pages_per_image", 10))
+        except (IOError, json.JSONDecodeError):
+            pass  # 加载失败则忽略
+
+    def save_settings(self):
+        settings = {
+            "save_path": self.save_path_line_edit.text(),
+            "zoom_factor": self.zoom_spinbox.value(),
+            "pages_per_image": self.pages_per_image_spinbox.value()
+        }
+        with open("settings.json", "w") as f:
+            json.dump(settings, f, indent=4)
+
+    def closeEvent(self, event):
+        self.save_settings()
+        event.accept()
